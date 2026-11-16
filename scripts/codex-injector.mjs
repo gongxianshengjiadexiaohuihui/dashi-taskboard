@@ -1138,7 +1138,36 @@ async function requestCodexAutomationViaCdp(cdp, executionContextId, method, par
     (++codexAutomationRequestSequence).toString(36),
   ].join("-");
   const evaluation = await cdp.send("Runtime.evaluate", {
-    expression: `(() => new Promise((resolve) => {
+    expression: `(async () => {
+      const serviceMethod = ${JSON.stringify({
+        "list-automations": "list",
+        "automation-create": "create",
+        "automation-update": "update",
+      }[method])};
+      for (const script of [...document.scripts].reverse()) {
+        if (!script.src || new URL(script.src).protocol !== "app:") continue;
+        const runtime = await import(script.src);
+        const modules = runtime.__webpack_require__?.c;
+        if (!modules) continue;
+        const services = Object.values(modules).find((module) =>
+          module.exports && Object.hasOwn(module.exports, "appServices")
+        )?.exports.appServices;
+        const automations = services?.localAutomations;
+        if (!automations) continue;
+        const request = serviceMethod === "list"
+          ? automations.list()
+          : automations[serviceMethod](${JSON.stringify(params)});
+        try {
+          return {
+            ok: true,
+            status: 200,
+            bodyJsonString: JSON.stringify(await request),
+          };
+        } finally {
+          request[Symbol.dispose]?.();
+        }
+      }
+      return new Promise((resolve) => {
       const method = ${JSON.stringify(method)};
       const params = ${JSON.stringify(params)};
       const requestId = ${JSON.stringify(requestId)};
@@ -1187,7 +1216,8 @@ async function requestCodexAutomationViaCdp(cdp, executionContextId, method, par
           error: error instanceof Error ? error.message : String(error),
         });
       });
-    }))()`,
+      });
+    })()`,
     ...(Number.isInteger(executionContextId) ? { contextId: executionContextId } : {}),
     awaitPromise: true,
     returnByValue: true,
